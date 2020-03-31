@@ -1,9 +1,10 @@
+#!/usr/bin/env python3
 import socket
 from toolz import merge
+import json
 
 
 class HTTPRequest:
-
     method = None
     uri = None
     http_version = None
@@ -13,8 +14,8 @@ class HTTPRequest:
             self,
             method,
             uri,
-            http_version,
-    ):
+            http_version):
+
         self.method = method
         self.uri = uri
         self.http_version = http_version
@@ -58,6 +59,10 @@ class TCPServer:
 
     def run(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # Configure socket to reuse address if socket is stuck
+        # in TIME_WAIT state. Prevents "Adress already in use"
+        # errors, when  restarting the server.
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         s.bind((self.host, self.port))
@@ -82,13 +87,8 @@ class TCPServer:
 
 
 def handle_get(request):
-    body = """
-        <html>
-            <body>
-                <h1>Request received!</h1>
-            </body>
-        </html>
-    """
+    body = [{"message": "Request received!"}]
+    body = json.dumps(body)
     response = Response(
         status=200,
         body=body,
@@ -196,13 +196,16 @@ class Response:
 class HTTPServer(TCPServer):
     headers = {
         'Server': 'CrudeServer',
-        'Content-Type': 'text/html'
+        'Content-Type': 'text/json'
+
     }
     status_code = {
         200: 'OK',
         404: 'Not Found',
     }
-    request_handler = RequestHandler()
+
+    def __init__(self):
+        self.request_handler = RequestHandler()
 
     def handle_request(self, request):
         return self.request_handler(request)
