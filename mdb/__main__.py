@@ -1,5 +1,5 @@
-from mdb.server import HTTPServer
+from mdb.db import DBServer
 
 
-server = HTTPServer()
+server = DBServer()
 server.run()

@@ -14,23 +14,37 @@ class HTTPRequest:
             self,
             method,
             uri,
-            http_version):
+            http_version,
+            body,
+            raw_request):
 
         self.method = method
         self.uri = uri
         self.http_version = http_version
+        self.body = body
+        self.raw_request = raw_request
 
 
-def parse_request(data):
-    data = data.decode('utf8')
+class MalformedRequest(HTTPRequest):
+    def __init__(self):
+        pass
+
+
+def parse_request(raw_request):
+    data = raw_request.decode('utf8')
     lines = data.split('\r\n')
     request_line = lines[0]
+    body = ""
+    if len(lines) >= 2:
+        body = lines[1]
 
     method, uri, http_version = parse_request_start_line(request_line)
     return HTTPRequest(
         method,
         uri,
         http_version,
+        body,
+        raw_request,
     )
 
 
@@ -48,46 +62,82 @@ def parse_request_start_line(request_line):
     return method, uri, http_version
 
 
+def check_server(host, port):
+    try:
+        s = socket.socket()
+        s.connect((host, port))
+        return True
+    except socket.error:
+        return False
+    finally:
+        s.close()
+
+
 class TCPServer:
     def __init__(
             self,
-            host='127.0.0.1',
+            host='localhost',
             port=8888):
 
         self.host = host
         self.port = port
-
-    def run(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
         # Configure socket to reuse address if socket is stuck
         # in TIME_WAIT state. Prevents "Adress already in use"
         # errors, when  restarting the server.
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_REUSEADDR, 1)
 
-        s.bind((self.host, self.port))
+    def __enter__(self):
+        self._bind_socket()
+        return self
 
-        s.listen(5)
+    def __exit__(self, exception_type, exception_value, traceback):
+        self._socket.close()
+        if exception_type is not None:
+            raise exception_type(exception_value)
 
-        print("Listening at", s.getsockname())
+    def _bind_socket(self):
+        self._socket.bind((self.host, self.port))
+
+
+    def listen(self):
+        self._socket.listen(5)
+
+        for retry in range(5):
+            if check_server(self.host, self.port):
+                print("Listening at", self._socket.getsockname())
+                break
+            else:
+                raise RuntimeError("Server failed to set up properly after 5 checks.")
 
         while True:
-
-            conn, addr = s.accept()
+            conn, addr = self._socket.accept()
             print("Connected by", addr)
+
+            # TODO Require and use a packet length prefix.
             data = conn.recv(1024)
 
-            response = self.handle_request(data)
+            request = self.handle_request(data)
+            if isinstance(request, MalformedRequest):
+                conn.close()
+            else:
+                response = request
+                conn.sendall(response.encode('utf8'))
+                conn.close()
 
-            conn.sendall(response.encode('utf8'))
-            conn.close()
+    def run(self):
+        self._bind_socket()
+        self.listen()
 
     def handle_request(self, request):
         return request
 
 
 def handle_get(request):
-    body = [{"message": "Request received!"}]
+    body = [{"received request": request.raw_request.decode('utf8')}]
     body = json.dumps(body)
     response = Response(
         status=200,
@@ -109,25 +159,28 @@ def handle_post(request):
     raise NotImplementedError
 
 
-REQUEST_HANDLERS = {
+DEFAULT_REQUEST_HANDLERS = {
     "GET": handle_get,
     "POST": handle_options,
     "OPTIONS": handle_post,
 }
 
 
-def get_request_handler_by_method(method):
-    return REQUEST_HANDLERS.get(method)
-
-
 class RequestHandler:
     handlers = None
 
-    def __init__(self):
-        self.handlers = REQUEST_HANDLERS
+    def __init__(self, handlers=None):
+        self.handlers = DEFAULT_REQUEST_HANDLERS
+
+        if handlers is not None:
+            self.handlers = merge(self.handlers, handlers)
 
     def __call__(self, request):
-        request = parse_request(request)
+        try:
+            request = parse_request(request)
+        except IndexError:
+            print("Received non-http formed packet")
+            return MalformedRequest()
         try:
             handler = self.handlers[request.method]
         except IndexError:
@@ -142,6 +195,7 @@ class RequestHandler:
 STATUS_CODES = {
     200: 'OK',
     404: 'Not Found',
+    500: 'Server Error'
 }
 
 
@@ -197,14 +251,15 @@ class HTTPServer(TCPServer):
     headers = {
         'Server': 'CrudeServer',
         'Content-Type': 'text/json'
-
     }
     status_code = {
         200: 'OK',
         404: 'Not Found',
+        500: 'Server Error'
     }
 
     def __init__(self):
+        super().__init__()
         self.request_handler = RequestHandler()
 
     def handle_request(self, request):
