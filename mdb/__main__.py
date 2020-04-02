@@ -1,4 +1,4 @@
-from mdb.db import DBServer
+from mdb.server import DBServer
 
 
 server = DBServer()

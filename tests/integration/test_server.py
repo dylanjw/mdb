@@ -42,16 +42,13 @@ def test_server_process():
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        bufsize=1,
     )
 
     for retry in range(10):
         if check_server('localhost', 8888):
             break
         time.sleep(0.1)
-    else:
-        raise RuntimeError("Failed to connect to server.")
-
+    else: raise RuntimeError("Failed to connect to server.")
     try:
         yield proc
     finally:
